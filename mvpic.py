@@ -7,7 +7,7 @@ import sys, getopt
 import os
 import re
 
-import filetype
+# import filetype
 
 from exif import Image
 # from rawphoto.cr2 import Cr2
@@ -24,42 +24,60 @@ class Counter(dict):
 
 # globals
 
+myExtensions = {'.jpg', '.jpeg', '.cr2', '.png', '.rw2', '.dng', '.gif', '.tif', '.heic'}
+
+cams = {'Canon DIGITAL IXUS 100 IS': 'CanonIXUS100',
+        'Canon DIGITAL IXUS 430': 'CanonIXUS430',
+        'Canon DIGITAL IXUS 70': 'CanonIXUS70',
+'Canon EOS 350D DIGITAL': 'EOS350D',
+'Canon EOS 6D Mark II': 'EOS6DmkII',
+'Canon EOS 70D': 'EOS70D',
+'Canon PowerShot G5':'CanonG5',
+'KODAK DC280 ZOOM DIGITAL CAMERA':'KodakDC280'
+
+}
+
+folders2ignore = {'Mac OS Wallpaper Pack', 'Fotos Library'}
+
+
+
+outp = ''
 simulate = False
 recursive = False
 verbose = False
+pmeta = False
+pexif = False
 events = False
-        
+
+metacollection = {}
+
 counters = Counter()
 
-def extractExif(meta, imgFile):
-    with open(imgFile, 'rb') as ifile:
-        thisImg = Image(ifile)
 
-        if(thisImg.has_exif):
-            meta['Model'] = thisImg.Model
-            meta['datetime_digitized'] = thisImg.datetime_digitized
-            if(verbose):
-                print(imgFile + ": " + thisImg.Model + "-" + thisImg.datetime_digitized)
-                print(thisImg.gps_latitude, thisImg.gps_longitude)
+        
 
-        ifile.close()
-    return
 
+# sub
 
 # https://bhoey.com/blog/extracting-raw-photo-exif-data-with-python/
 def extractExiv2(meta, imgFile):
     md = pyexiv2.ImageMetadata(imgFile)
-    md.read()
+    try:
+        md.read()
+    except:
+        return
 
     # print all exif tags in file
-    #if(verbose):
-    #    for m in md:
-    #        print(m + "=" + str(md[m]))
+    if(pexif):
+        for m in md:
+            print(m + "=" + str(md[m]))
 
     # pick model + date
     exifData = {
     'Model': 'Exif.Image.Model',
-    'DateTimeDigitized': 'Exif.Photo.DateTimeOriginal' }
+    'DateTimeDigitized': 'Exif.Photo.DateTimeOriginal',
+    'PixelX': 'Exif.Photo.PixelXDimension',
+    'PixelY': 'Exif.Photo.PixelYDimension' }
     for key in exifData:
         if(exifData[key] in md):
             counters['has:' + key] += 1
@@ -69,86 +87,93 @@ def extractExiv2(meta, imgFile):
     return
 
 
-def collectMeta(meta, imgFile):
-    global counters
-    
-    counters['total'] += 1
-    filebase, fileext = os.path.splitext(imgFile)
-    filepath, filename = os.path.split(imgFile)
+# look at file and extract metadata:
+#  1. via filename and filesystem information
+#  2. analyze Canon/Nikon RAW files via rawphoto
+#      https://gist.github.com/SamWhited/af58edaed66414bded84      
+#  3. analyze other RAW files via pi3exiv2
+#      https://bhoey.com/blog/extracting-raw-photo-exif-data-with-python/
+def collectMeta(meta, imgFile, filename, fileext):
 
-    # skip anything starting with a . or non interesting filetypes
-    myExtensions = {'.jpg', '.jpeg', '.cr2', '.png', '.rw2', '.dng', '.gif', '.tif', '.heic'}
-    if(filename[:1]=='.' or fileext.lower() not in myExtensions):
-        counters['ignored'] += 1
-        return
-
-    counters['toMove'] += 1
-    counters[fileext.lower()] += 1
-
-    meta['fullpath']=imgFile
+    meta['origin']=imgFile
     meta['ext']=fileext.lower()
-    meta['filename']=filename
+    #meta['filename']=filename
       
     meta['size']=os.path.getsize(imgFile)
     # meta['ctime']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getctime(imgFile)))
-    meta['mtime']=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(imgFile)))
+    modtime=time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(imgFile)))
 
     # handle: - image files (jpg, png, etc)
     #         - raw files (CR2, ...)
     #      (   - Metadata files (XMP): move together with corresponding image file )
     
     # https://pypi.org/project/filetype/
-    kind = filetype.guess(imgFile)
-    meta['kind']=kind
-    if(kind!=None):
-        extractExiv2(meta, imgFile)	
+    # kind = filetype.guess(imgFile)
+    # meta['kind']=kind
+    #if(kind!=None):
+    extractExiv2(meta, imgFile)	
     
     # heuristics
     if('DateTimeDigitized' in meta):
-        meta['bestDate']=meta['DateTimeDigitized']
+        meta['DateTimeUsed']=meta['DateTimeDigitized']
     else:
-        meta['bestDate']=meta['mtime']
+        meta['DateTimeUsed']=modtime
 
-    meta['year'] = str(meta['bestDate'])[:4]
+    # DateTime Format: YYYY-MM-DD HH:mm:ss
+    #                  1234567890123456789
+    meta['day'] = str(meta['DateTimeUsed'])[:10]     # first 10 chars
+    meta['time'] = str(meta['DateTimeUsed'])[11:]    # rest, starting from 12th char
+    meta['year'] = str(meta['DateTimeUsed'])[:4]     # first 4 chars
     counters[str('year:' + meta['year'])] += 1
-    meta['day'] = str(meta['bestDate'])[:10]
 
-    if('Model' in meta):
-        meta['bestModel']=meta['Model']
-    else:
-        meta['bestModel']='other'
+    if(not 'Model' in meta):
+        meta['Model']='other'
+
+    targetpath = str(meta['year'] + '/' + meta['day'])
+    targetname = str(meta['time'] + '_' + meta['Model'] + '_' + filename)
+
+    meta['target'] = str(targetpath + '/' + targetname )
 
 
-
-
-# look at file, find out, how to extract metadata:
-#  1. via Exif data
-#      https://pypi.org/project/exif/
-#  2. analyze Canon/Nikon RAW files via rawphoto
-#      https://gist.github.com/SamWhited/af58edaed66414bded84      
-#  3. analyze other RAW files via pi3exiv2
-#      https://bhoey.com/blog/extracting-raw-photo-exif-data-with-python/
 def handleFile(imgFile):
     global counters
-    if(verbose):
-        print("entering handleFile: " + imgFile)
+    global metacollection
+    global myextensions
+
+    #if(verbose):
+    #    print("entering handleFile: " + imgFile)
     if(not os.path.exists(imgFile)):
         return 
 
+    counters['total'] += 1
+    filebase, fileext = os.path.splitext(imgFile)
+    filepath, filename = os.path.split(imgFile)
+
+    # skip anything starting with a . or non interesting filetypes
+    
+    if(filename[:1]=='.' or fileext.lower() not in myExtensions):
+        counters['ignored'] += 1
+        return
+    counters['ToDo'] += 1
+    counters[fileext.lower()] += 1
+
     meta={}
 
-    collectMeta(meta, imgFile)
+    collectMeta(meta, imgFile, filename, fileext)
+
     # what have we got?
-    if(verbose):
+    if(pmeta):
         print('extracted Metadata:')
         for x in meta:
             print('meta: ' + x + "=" + str(meta[x]))
 
+    metacollection[str(meta['DateTimeUsed'])] = meta
+
 
 # iterate all entries in the directory. walk directory tree, if recursive is set
 def handleDir(imgDir):
-    if(verbose):
-        print("entering handleDir: " + imgDir)
+    #if(verbose):
+    #   print("entering handleDir: " + imgDir)
 
     for entry in os.scandir(imgDir):
         if(entry.is_file()):
@@ -159,57 +184,76 @@ def handleDir(imgDir):
 
 
 def usage(err):
-    print(__file__  + ' -o <output directory> [-r] [-s] [-v] <inputfiles/directory>')
+    print(__file__  + ' -o <output directory> [-r] [-s] [-m] [-e] [-v] <inputfiles/directory>')
+    print('-r: recursive\n-s: simulate only\n-m: print collected image metadata\n-e: print image exif data\n-v: verbose output')
     sys.exit(err)
 
 
 
-
 def main(argv):
-   inlist = []
-   outp = ''
-   global simulate
-   global recursive
-   global verbose
-   global events
-   global counters
-   try:
-      opts, args = getopt.getopt(argv,"ho:srv",["ofile=","simulate","recursive","verbose"])
-   except getopt.GetoptError:
-      usage(2)
-   if(args):
-      inlist = args
-   for opt, arg in opts:
-      if opt == '-h':
-         usage(0)
-      elif opt in ("-o", "--ofile"):
-         outp = arg
-      elif opt in ("-s", "--simulate"):
-         simulate = True
-      elif opt in ("-r", "--recursive"):
-         recursive = True
-      elif opt in ("-v", "--verbose"):
-         verbose = True
-   if(verbose):
-       print('Input List is: ', inlist)
-       print('Output file is: ', outp)
-       print('simulate: ', simulate)
-       print('recursive: ', recursive)
+    inlist = []
+    global outp
+    global simulate
+    global recursive
+    global verbose
+    global pmeta
+    global pexif
+    global events
+    global counters
 
-   if(len(inlist)<1):
-   	   usage(2)
+    global metacollection
+
+    try:
+        opts, args = getopt.getopt(argv,'ho:srvme',['ofile=','simulate','recursive','verbose','pmeta','exif'])
+    except getopt.GetoptError:
+        usage(2)
+    if(args):
+        inlist = args
+    for opt, arg in opts:
+        if opt == '-h':
+            usage(0)
+        elif opt in ("-o", "--ofile"):
+            outp = arg
+        elif opt in ("-s", "--simulate"):
+            simulate = True
+        elif opt in ("-r", "--recursive"):
+            recursive = True
+        elif opt in ("-v", "--verbose"):
+            verbose = True
+        elif opt in ("-e", "--exif"):
+            pexif = True
+        elif opt in ("-m", "--pmeta"):
+            pmeta = True
+    if(verbose):
+        print('Input List is: ', inlist)
+        print('Output dir is: ', outp)
+        print('simulate: ', simulate)
+        print('recursive: ', recursive)
+        print('verbose: ', verbose)
+        print('pmeta: ', pmeta)
+        print('exif: ', pexif)
+
+    if(len(inlist)<1):
+        usage(2)
    
-   for inp in inlist:
-       if(os.path.isfile(inp)):
-           handleFile(inp)
-       if(os.path.isdir(inp)):
-           handleDir(inp)
-# output counters
-   for item, cnt in counters.items():
-       print('counted: ', item, ': ', cnt)
+    # traverse inlist and collect data on all images
+    for inp in inlist:
+        if(os.path.isfile(inp)):
+            handleFile(inp)
+        if(os.path.isdir(inp)):
+            handleDir(inp)
+
+    # output counters
+    for item, cnt in counters.items():
+        print('counted: ', item, ': ', cnt)
+
+    # output intent what to do
+    for img in metacollection:
+        meta = metacollection[img]
+        print("move " + str(meta['origin']) + ' to ' + str(meta['target']))
 
 if __name__ == "__main__":
-   main(sys.argv[1:])
+    main(sys.argv[1:])
 
 
 
