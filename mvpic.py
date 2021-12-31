@@ -26,15 +26,15 @@ class Counter(dict):
 
 myExtensions = {'.jpg', '.jpeg', '.cr2', '.png', '.rw2', '.dng', '.gif', '.tif', '.heic'}
 
-cams = {'Canon DIGITAL IXUS 100 IS': 'CanonIXUS100',
+myCams = {'Canon DIGITAL IXUS 100 IS': 'CanonIXUS100',
         'Canon DIGITAL IXUS 430': 'CanonIXUS430',
         'Canon DIGITAL IXUS 70': 'CanonIXUS70',
-'Canon EOS 350D DIGITAL': 'EOS350D',
-'Canon EOS 6D Mark II': 'EOS6DmkII',
-'Canon EOS 70D': 'EOS70D',
-'Canon PowerShot G5':'CanonG5',
-'KODAK DC280 ZOOM DIGITAL CAMERA':'KodakDC280'
-
+        'Canon EOS 350D DIGITAL': 'EOS350D',
+        'Canon EOS 6D Mark II': 'EOS6DmkII',
+        'Canon EOS 70D': 'EOS70D',
+        'Canon PowerShot G5':'CanonG5',
+        'KODAK DC280 ZOOM DIGITAL CAMERA':'KodakDC280',
+        'PENTAX Optio S ': 'PENTAX-OptioS'
 }
 
 folders2ignore = {'Mac OS Wallpaper Pack', 'Fotos Library'}
@@ -78,11 +78,11 @@ def extractExiv2(meta, imgFile):
     'DateTimeDigitized': 'Exif.Photo.DateTimeOriginal',
     'PixelX': 'Exif.Photo.PixelXDimension',
     'PixelY': 'Exif.Photo.PixelYDimension' }
+
     for key in exifData:
         if(exifData[key] in md):
             counters['has:' + key] += 1
             meta[key] = md[exifData[key]].value
-
 
     return
 
@@ -126,7 +126,10 @@ def collectMeta(meta, imgFile, filename, fileext):
     meta['year'] = str(meta['DateTimeUsed'])[:4]     # first 4 chars
     counters[str('year:' + meta['year'])] += 1
 
-    if(not 'Model' in meta):
+    if('Model' in meta):
+        if(meta['Model'] in myCams):
+            meta['Model'] = myCams[str(meta['Model'])]
+    else:
         meta['Model']='other'
 
     targetpath = str(meta['year'] + '/' + meta['day'])
@@ -150,7 +153,6 @@ def handleFile(imgFile):
     filepath, filename = os.path.split(imgFile)
 
     # skip anything starting with a . or non interesting filetypes
-    
     if(filename[:1]=='.' or fileext.lower() not in myExtensions):
         counters['ignored'] += 1
         return
@@ -167,8 +169,17 @@ def handleFile(imgFile):
         for x in meta:
             print('meta: ' + x + "=" + str(meta[x]))
 
-    metacollection[str(meta['DateTimeUsed'])] = meta
-
+    # do we have already an image at timestamp ?
+    if str(meta['DateTimeUsed']) in metacollection:
+         prev = metacollection[str(meta['DateTimeUsed'])]
+         # is it the same type? raw+jpg will be kept
+         if(prev['ext'] == meta['ext']):
+             # only keep the largest image
+             if meta['size'] > prev['size']:
+                 counters['doubled'] += 1
+                 metacollection[str(meta['DateTimeUsed'])] = meta
+    else:
+         metacollection[str(meta['DateTimeUsed'])] = meta
 
 # iterate all entries in the directory. walk directory tree, if recursive is set
 def handleDir(imgDir):
@@ -250,7 +261,8 @@ def main(argv):
     # output intent what to do
     for img in metacollection:
         meta = metacollection[img]
-        print("move " + str(meta['origin']) + ' to ' + str(meta['target']))
+        if(simulate):
+            print("move " + str(meta['origin']) + ' to ' + str(meta['target']))
 
 if __name__ == "__main__":
     main(sys.argv[1:])
