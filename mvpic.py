@@ -24,8 +24,10 @@ class Counter(dict):
 
 # globals
 
+# ext comparisons are done lowercase
 myExtensions = {'.jpg', '.jpeg', '.cr2', '.png', '.rw2', '.dng', '.gif', '.tif', '.heic'}
 
+# shorten some EXIF-Model descriptions, as they go into the filename
 myCams = {'Canon DIGITAL IXUS 100 IS': 'CanonIXUS100',
         'Canon DIGITAL IXUS 430': 'CanonIXUS430',
         'Canon DIGITAL IXUS 70': 'CanonIXUS70',
@@ -70,7 +72,10 @@ def extractExiv2(meta, imgFile):
     # print all exif tags in file
     if(pexif):
         for m in md:
-            print(m + "=" + str(md[m]))
+            if(not re.findall('apple-fi', m)):# skip due to bug in exiv library
+                print(m + ": " + str(md[m]))
+            else:
+                print(m + ': ' + '========== SKIPPED ==========')
 
     # pick model + date
     exifData = {
@@ -185,7 +190,11 @@ def handleFile(imgFile):
 def handleDir(imgDir):
     #if(verbose):
     #   print("entering handleDir: " + imgDir)
-
+    # skip ignored dirs
+    for pattern in folders2ignore:
+        if(re.findall(pattern, imgDir)):
+            counters['skipped dir'] += 1
+            return 
     for entry in os.scandir(imgDir):
         if(entry.is_file()):
             handleFile(entry.path)
