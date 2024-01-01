@@ -6,6 +6,9 @@
 import sys, getopt
 import os
 import re
+# importing modules
+from geopy.geocoders import Nominatim
+ 
 
 # import filetype
 
@@ -61,6 +64,37 @@ counters = Counter()
 
 # sub
 
+# GPS data decoding helpers
+# from: https://developer.here.com/blog/getting-started-with-geocoding-exif-image-metadata-in-python3
+# adapted slightly for Fraction use
+def get_decimal_from_dms(dms, ref):
+
+    degrees = dms[0]
+    minutes = dms[1] / 60.0
+    seconds = dms[2] / 3600.0
+
+    if ref in ['S', 'W']:
+        degrees = -degrees
+        minutes = -minutes
+        seconds = -seconds
+
+    return round(degrees + minutes + seconds, 5)
+
+# adapted this a little bit
+def get_coordinates(lat_coords, lat_ref, lon_coords, lon_ref):
+    lat = get_decimal_from_dms(lat_coords, lat_ref)
+    lon = get_decimal_from_dms(lon_coords, lon_ref)
+
+    # calling the nominatim tool
+    geoLoc = Nominatim(user_agent="GetLoc")
+ 
+    # passing the coordinates
+    locname = geoLoc.reverse(str(lat)+", "+str(lon))
+
+    return (lat, lon, locname.address)
+
+
+
 # https://bhoey.com/blog/extracting-raw-photo-exif-data-with-python/
 def extractExiv2(meta, imgFile):
     md = pyexiv2.ImageMetadata(imgFile)
@@ -82,7 +116,12 @@ def extractExiv2(meta, imgFile):
     'Model': 'Exif.Image.Model',
     'DateTimeDigitized': 'Exif.Photo.DateTimeOriginal',
     'PixelX': 'Exif.Photo.PixelXDimension',
-    'PixelY': 'Exif.Photo.PixelYDimension' }
+    'PixelY': 'Exif.Photo.PixelYDimension',
+    'GPSLatitudeRef': 'Exif.GPSInfo.GPSLatitudeRef',
+    'GPSLatitude': 'Exif.GPSInfo.GPSLatitude',
+    'GPSLongitudeRef': 'Exif.GPSInfo.GPSLongitudeRef',
+    'GPSLongitude': 'Exif.GPSInfo.GPSLongitude'
+ }
 
     for key in exifData:
         if(exifData[key] in md):
@@ -119,6 +158,7 @@ def collectMeta(meta, imgFile, filename, fileext):
     extractExiv2(meta, imgFile)	
     
     # heuristics
+    # figure out best date+time we can get
     if('DateTimeDigitized' in meta):
         meta['DateTimeUsed']=meta['DateTimeDigitized']
     else:
@@ -131,11 +171,17 @@ def collectMeta(meta, imgFile, filename, fileext):
     meta['year'] = str(meta['DateTimeUsed'])[:4]     # first 4 chars
     counters[str('year:' + meta['year'])] += 1
 
+    # get the Model
     if('Model' in meta):
         if(meta['Model'] in myCams):
             meta['Model'] = myCams[str(meta['Model'])]
     else:
         meta['Model']='other'
+
+    # get coordinates and location as text
+    if('GPSLatitude' in meta):
+        (meta['lat'],meta['lon'],meta['location)']) = get_coordinates(meta['GPSLatitude'], meta['GPSLatitudeRef'], meta['GPSLongitude'], meta['GPSLongitudeRef'])
+
 
     targetpath = str(meta['year'] + '/' + meta['day'])
     targetname = str(meta['time'] + '_' + meta['Model'] + '_' + filename)
